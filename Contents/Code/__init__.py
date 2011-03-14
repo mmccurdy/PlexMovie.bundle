@@ -496,7 +496,9 @@ class PlexMovieAgent(Agent.Movies):
     jsonObj = self.getGoogleResults(GOOGLE_JSON_URL % (self.getPublicIP(), id))
 
     try:
-      (title, year) = parseIMDBTitle(jsonObj[0]['titleNoFormatting'],jsonObj[0]['unescapedUrl'])
+      titleInfo = parseIMDBTitle(jsonObj[0]['titleNoFormatting'],jsonObj[0]['unescapedUrl'])
+      title = titleInfo['title']
+      year = titleInfo['year']
       return (safe_unicode(title), safe_unicode(year))
     except:
       pass
