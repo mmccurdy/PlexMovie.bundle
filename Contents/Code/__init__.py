@@ -489,7 +489,7 @@ class PlexMovieAgent(Agent.Movies):
     if m and not metadata.year:
       id = m.groups(1)[0]
       (title, year) = self.findById(id)
-      metadata.year = year
+      metadata.year = int(year)
 
 
   def findById(self, id):
