@@ -68,6 +68,7 @@ class PlexMovieAgent(Agent.Movies):
     idMap = {}
     bestNameMap = {}
     bestNameDist = 1000
+    bestHitScore = 0
    
     # TODO: create a plex controlled cache for lookup
     # TODO: by imdbid  -> (title,year)
@@ -82,7 +83,8 @@ class PlexMovieAgent(Agent.Movies):
       findByIdCalled = True
       (title, year) = self.findById(theGuid)
       if title is not None:
-        results.Append(MetadataSearchResult(id=theGuid, name=title, year=year, lang=lang, score=100))
+        bestHitScore = 100 # Treat a guid-match as a perfect score
+        results.Append(MetadataSearchResult(id=theGuid, name=title, year=year, lang=lang, score=bestHitScore))
         bestNameMap[theGuid] = title
           
     if media.year:
@@ -93,7 +95,6 @@ class PlexMovieAgent(Agent.Movies):
     # first look in the proxy/cache 
     titleyear_guid = self.titleyear_guid(media.name,media.year)
 
-    bestCacheHitScore = 0
     cacheConsulted = False
 
     # plexhash search vector
@@ -153,8 +154,8 @@ class PlexMovieAgent(Agent.Movies):
   
           Log("score penalty (used to determine if google is needed) = %d" % scorePenalty)
 
-          if (score - scorePenalty) > bestCacheHitScore:
-            bestCacheHitScore = score - scorePenalty
+          if (score - scorePenalty) > bestHitScore:
+            bestHitScore = score - scorePenalty
   
           cacheConsulted = True
           # score at minimum 85 (threshold) since we trust the cache to be at least moderately good
@@ -208,8 +209,8 @@ class PlexMovieAgent(Agent.Movies):
 
         Log("score penalty (used to determine if google is needed) = %d" % scorePenalty)
 
-        if (score - scorePenalty) > bestCacheHitScore:
-          bestCacheHitScore = score - scorePenalty
+        if (score - scorePenalty) > bestHitScore:
+          bestHitScore = score - scorePenalty
 
         cacheConsulted = True
         # score at minimum 85 (threshold) since we trust the cache to be at least moderately good
@@ -219,7 +220,7 @@ class PlexMovieAgent(Agent.Movies):
       Log("freebase/proxy guid lookup failed: %s" % repr(e))
 
     doGoogleSearch = False
-    if len(results) == 0 or bestCacheHitScore < SCORE_THRESHOLD_IGNORE or manual == True or (bestCacheHitScore < 100 and len(results) == 1):
+    if len(results) == 0 or bestHitScore < SCORE_THRESHOLD_IGNORE or manual == True or (bestHitScore < 100 and len(results) == 1):
       doGoogleSearch = True
 
     Log("PLEXMOVIE INFO RETRIEVAL: FINDBYID: %s CACHE: %s SEARCH_ENGINE: %s" % (findByIdCalled, cacheConsulted, doGoogleSearch))
