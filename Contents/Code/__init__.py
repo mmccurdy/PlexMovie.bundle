@@ -489,22 +489,49 @@ class PlexMovieAgent(Agent.Movies):
     m = re.search('(tt[0-9]+)', metadata.guid)
     if m and not metadata.year:
       id = m.groups(1)[0]
-      (title, year) = self.findById(id)
+      # We already tried Freebase above, so go directly to Google
+      (title, year) = self.findById(id, skipFreebase=True)
       metadata.year = int(year)
 
 
-  def findById(self, id):
-    jsonObj = self.getGoogleResults(GOOGLE_JSON_URL % (self.getPublicIP(), id))
+  def findById(self, id, skipFreebase=False):
+    title = None
+    year = None
 
-    try:
-      titleInfo = parseIMDBTitle(jsonObj[0]['titleNoFormatting'],jsonObj[0]['unescapedUrl'])
-      title = titleInfo['title']
-      year = titleInfo['year']
+    if not skipFreebase:
+      # Try Freebase first, since spamming Google will easily get us blocked
+      url = '%s/%s/%s/%s.xml' % (FREEBASE_URL, FREEBASE_BASE, id[-2:], id[2:])
+
+      try:
+        movie = XML.ElementFromURL(url, cacheTime=3600)
+
+        # Title
+        if len(movie.get('title')) > 0:
+          title = movie.get('title')
+
+        # Year
+        if len(movie.get('originally_available_at')) > 0:
+          elements = movie.get('originally_available_at').split('-')
+          if len(elements) >= 1 and len(elements[0]) == 4:
+            year = int(elements[0])
+      except:
+        pass
+
+    if not title or not year:
+      # No dice, hit up Google
+      jsonObj = self.getGoogleResults(GOOGLE_JSON_URL % (self.getPublicIP(), id))
+
+      try:
+        titleInfo = parseIMDBTitle(jsonObj[0]['titleNoFormatting'],jsonObj[0]['unescapedUrl'])
+        title = titleInfo['title']
+        year = titleInfo['year']
+      except:
+        pass
+
+    if title and year:
       return (safe_unicode(title), safe_unicode(year))
-    except:
-      pass
-    
-    return (None, None)
+    else:
+      return (None, None)
 
 def parseIMDBTitle(title, url):
 
