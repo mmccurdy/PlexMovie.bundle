@@ -21,7 +21,7 @@ class PlexMovieAgent(Agent.Movies):
   name = 'Freebase'
   languages = [Locale.Language.English, Locale.Language.Swedish, Locale.Language.French, 
                Locale.Language.Spanish, Locale.Language.Dutch, Locale.Language.German, 
-               Locale.Language.Italian]
+               Locale.Language.Italian, Locale.Language.Danish]
 
   def identifierize(self, string):
       string = re.sub( r"\s+", " ", string.strip())
