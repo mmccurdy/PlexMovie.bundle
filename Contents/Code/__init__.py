@@ -7,7 +7,7 @@ GOOGLE_JSON_URL = 'http://ajax.googleapis.com/ajax/services/search/web?v=1.0&use
 FREEBASE_URL    = 'http://freebase.plexapp.com'
 FREEBASE_BASE   = 'movies'
 PLEXMOVIE_URL   = 'http://plexmovie.plexapp.com'
-PLEXMOVIE_BASE  = 'movie.12.unicode'
+PLEXMOVIE_BASE  = 'movie'
 
 SCORE_THRESHOLD_IGNORE         = 85
 SCORE_THRESHOLD_IGNORE_PENALTY = 100 - SCORE_THRESHOLD_IGNORE
