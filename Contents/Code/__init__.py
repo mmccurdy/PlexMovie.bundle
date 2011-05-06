@@ -86,6 +86,7 @@ class PlexMovieAgent(Agent.Movies):
         bestHitScore = 100 # Treat a guid-match as a perfect score
         results.Append(MetadataSearchResult(id=theGuid, name=title, year=year, lang=lang, score=bestHitScore))
         bestNameMap[theGuid] = title
+        bestNameDist = Util.LevenshteinDistance(media.name, title)
           
     if media.year:
       searchYear = u' (' + safe_unicode(media.year) + u')'
@@ -126,7 +127,8 @@ class PlexMovieAgent(Agent.Movies):
           Log("distance: %s" % distance)
           if not bestNameMap.has_key(id) or distance < bestNameDist:
             bestNameMap[id] = imdbName
-            bestNameDist = distance
+            if distance < bestNameDist:
+              bestNameDist = distance
 
           scorePenalty = 0
           scorePenalty += -1*bonus
@@ -179,7 +181,8 @@ class PlexMovieAgent(Agent.Movies):
         Log("distance: %s" % distance)
         if not bestNameMap.has_key(id) or distance < bestNameDist:
           bestNameMap[id] = imdbName
-          bestNameDist = distance
+          if distance < bestNameDist:
+            bestNameDist = distance
           
         imdbYear = safe_unicode(match.get('year'))
         count    = int(match.get('count'))
@@ -318,7 +321,8 @@ class PlexMovieAgent(Agent.Movies):
               Log("distance: %s" % distance)
               if not bestNameMap.has_key(id) or distance <= bestNameDist:
                 bestNameMap[id] = imdbName
-                bestNameDist = distance
+                if distance <= bestNameDist:
+                  bestNameDist = distance
               
               # Don't process for the same ID more than once.
               if idMap.has_key(id):
