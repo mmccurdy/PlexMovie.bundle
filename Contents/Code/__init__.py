@@ -1,4 +1,4 @@
-import datetime, re, time, unicodedata, hashlib, urlparse, types
+import datetime, re, time, unicodedata, hashlib, urlparse, types, urllib
 
 # [might want to look into language/country stuff at some point] 
 # param info here: http://code.google.com/apis/ajaxsearch/documentation/reference.html
@@ -242,10 +242,14 @@ class PlexMovieAgent(Agent.Movies):
     Log("PLEXMOVIE INFO RETRIEVAL: FINDBYID: %s CACHE: %s SEARCH_ENGINE: %s" % (findByIdCalled, cacheConsulted, doGoogleSearch))
 
     if doGoogleSearch:
+      # Try to strip diacriticals, but otherwise use the UTF-8.
       normalizedName = String.StripDiacritics(media.name)
-      GOOGLE_JSON_QUOTES = GOOGLE_JSON_URL % (self.getPublicIP(), String.Quote('"' + normalizedName + searchYear + '"', usePlus=True)) + '+site:imdb.com'
-      GOOGLE_JSON_NOQUOTES = GOOGLE_JSON_URL % (self.getPublicIP(), String.Quote(normalizedName + searchYear, usePlus=True)) + '+site:imdb.com'
-      GOOGLE_JSON_NOSITE = GOOGLE_JSON_URL % (self.getPublicIP(), String.Quote(normalizedName + searchYear, usePlus=True)) + '+imdb.com'
+      if len(normalizedName) == 0:
+        normalizedName = media.name
+        
+      GOOGLE_JSON_QUOTES = GOOGLE_JSON_URL % (self.getPublicIP(), String.Quote(('"' + normalizedName + searchYear + '"').encode('utf-8'), usePlus=True)) + '+site:imdb.com'
+      GOOGLE_JSON_NOQUOTES = GOOGLE_JSON_URL % (self.getPublicIP(), String.Quote((normalizedName + searchYear).encode('utf-8'), usePlus=True)) + '+site:imdb.com'
+      GOOGLE_JSON_NOSITE = GOOGLE_JSON_URL % (self.getPublicIP(), String.Quote((normalizedName + searchYear).encode('utf-8'), usePlus=True)) + '+imdb.com'
       
       subsequentSearchPenalty = 0
 
