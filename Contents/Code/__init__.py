@@ -228,9 +228,11 @@ class PlexMovieAgent(Agent.Movies):
         if (score - scorePenalty) > bestHitScore:
           bestHitScore = score - scorePenalty
 
+        # Get the official, localized name.
+        name, year = get_best_name_and_year(id[2:], lang, imdbName, imdbYear, lockedNameMap)
+
         cacheConsulted = True
-        # score at minimum 85 (threshold) since we trust the cache to be at least moderately good
-        results.Append(MetadataSearchResult(id = id, name  = imdbName, year = imdbYear, lang  = lang, score = score-scorePenalty))
+        results.Append(MetadataSearchResult(id = id, name  = name, year = year, lang  = lang, score = score-scorePenalty))
         score = score - 4
     except Exception, e:
       Log("freebase/proxy guid lookup failed: %s" % repr(e))
@@ -673,12 +675,13 @@ def get_best_name_and_year(guid, lang, fallback, fallback_year, best_name_map):
     movieEl = movie.xpath('//movie')[0]
     if movieEl.get('originally_available_at'):
       fallback_year = int(movieEl.get('originally_available_at').split('-')[0])
-    
+
     lang_match = False
-    for movie in movie.xpath('//title'):
-      if lang == movie.get('lang'):
-        ret = (movie.get('title'), fallback_year)
-        lang_match = True
+    if Prefs['title']:
+      for movie in movie.xpath('//title'):
+        if lang == movie.get('lang'):
+          ret = (movie.get('title'), fallback_year)
+          lang_match = True
 
     # Default to the English title.
     if not lang_match:
