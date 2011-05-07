@@ -419,11 +419,12 @@ class PlexMovieAgent(Agent.Movies):
       
   def update(self, metadata, media, lang):
 
-    # Set the title. FIXME, this won't work after a queued restart.
-    # Only do this once, otherwise we'll pull new names that get edited 
-    # out of the database.
+    # Set the title. Only do this once, otherwise we'll pull new names 
+    # that get edited out of the database.
     #
+    setTitle = False
     if media and metadata.title is None:
+      setTitle = True
       metadata.title = media.title
 
     # Hit our repository.
@@ -432,6 +433,13 @@ class PlexMovieAgent(Agent.Movies):
 
     try:
       movie = XML.ElementFromURL(url, cacheTime=3600)
+
+      # Title.
+      if not setTitle:
+        d = {}
+        name,year = get_best_name_and_year(guid, lang, None, None, d)
+        if name is not None:
+          metadata.title = name
 
       # Runtime.
       if int(movie.get('runtime')) > 0:
