@@ -103,16 +103,16 @@ class PlexMovieAgent(Agent.Movies):
     # plexhash search vector
     plexHashes = []
     score = 100
-    
+
     try:
       for item in media.items:
         for part in item.parts:
-          if part.plexHash: plexHashes.append(part.plexHash)
+          if part.hash: plexHashes.append(part.hash)
     except:
-      try: plexHashes.append(media.plexHash)
+      try: plexHashes.append(media.hash)
       except: pass
         
-    for ph in plexHashes: 
+    for ph in plexHashes:
       try:
         url = '%s/%s/hash/%s/%s.xml' % (PLEXMOVIE_URL, PLEXMOVIE_BASE, ph[0:2], ph)
         Log("checking plexhash search vector: %s" % url)
