@@ -52,7 +52,7 @@ class PlexMovieAgent(Agent.Movies):
   
   def getGoogleResults(self, url):
     try:
-      jsonObj = JSON.ObjectFromURL(url, sleep=0.5)
+      jsonObj = JSON.ObjectFromURL(url, headers={'Referer': 'http://www.plexapp.com'}, sleep=0.5)
       if jsonObj['responseData'] != None:
         jsonObj = jsonObj['responseData']['results']
         if len(jsonObj) > 0:
