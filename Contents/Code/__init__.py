@@ -9,6 +9,10 @@ FREEBASE_BASE   = 'movies'
 PLEXMOVIE_URL   = 'http://plexmovie.plexapp.com'
 PLEXMOVIE_BASE  = 'movie'
 
+MPDB_ROOT = 'http://movieposterdb.plexapp.com'
+MPDB_JSON = MPDB_ROOT + '/1/request.json?imdb_id=%s&api_key=p13x2&secret=%s&width=720&thumb_width=100'
+MPDB_SECRET = 'e3c77873abc4866d9e28277a9114c60c'
+
 SCORE_THRESHOLD_IGNORE         = 85
 SCORE_THRESHOLD_IGNORE_PENALTY = 100 - SCORE_THRESHOLD_IGNORE
 SCORE_THRESHOLD_IGNORE_PCT = float(SCORE_THRESHOLD_IGNORE_PENALTY)/100
@@ -416,6 +420,21 @@ class PlexMovieAgent(Agent.Movies):
       if not lockedNameMap.has_key(result.id) and bestNameMap.has_key(result.id):
         Log("id=%s score=%s -> Best name being changed from %s to %s" % (result.id, result.score, result.name, bestNameMap[result.id]))
         result.name = bestNameMap[result.id]
+        
+    # Augment with art.
+    if manual == True:
+      for result in results[0:3]:
+        try: 
+          id = re.findall('(tt[0-9]+)', result.id)[0]
+          imdb_code = id.lstrip('t0')
+          secret = Hash.MD5( ''.join([MPDB_SECRET, imdb_code]))[10:22]
+          queryJSON = JSON.ObjectFromURL(MPDB_JSON % (imdb_code, secret), cacheTime=10)
+          if not queryJSON.has_key('errors') and queryJSON.has_key('posters'):
+            thumb_url = MPDB_ROOT + '/' + queryJSON['posters'][0]['thumbnail_location']
+            result.thumb = thumb_url
+        except:
+          pass
+          
       
   def update(self, metadata, media, lang):
 
