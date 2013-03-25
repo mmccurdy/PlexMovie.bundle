@@ -162,7 +162,6 @@ class PlexMovieAgent(Agent.Movies):
             
           # Year penalty/bonus
           if media.year and year and int(media.year) != int(year):
-            Log(imdbName + ' penalizing for hint year and imdb year being different')
             yearDiff = abs(int(media.year)-(int(year)))
             score_penalty = 5 * yearDiff
           elif media.year and year and int(media.year) == int(year):
