@@ -4,9 +4,9 @@ import datetime, re, time, unicodedata, hashlib, urlparse, types, urllib
 # param info here: http://code.google.com/apis/ajaxsearch/documentation/reference.html
 #
 GOOGLE_JSON_URL = 'http://ajax.googleapis.com/ajax/services/search/web?v=1.0&userip=%s&rsz=large&q=%s'
-FREEBASE_URL    = 'http://freebase.plexapp.com'
+FREEBASE_URL    = 'http://192.168.1.116'
 FREEBASE_BASE   = 'movies'
-PLEXMOVIE_URL   = 'http://plexmovie.plexapp.com'
+PLEXMOVIE_URL   = 'http://192.168.1.22'
 PLEXMOVIE_BASE  = 'movie'
 
 MPDB_ROOT = 'http://movieposterdb.plexapp.com'
@@ -68,46 +68,10 @@ class PlexMovieAgent(Agent.Movies):
       Log("Exception obtaining result from Google.")
     
     return []
-  
-  def search(self, results, media, lang, manual=False):
+
+  def getHashResults(self, media, hash_matches):
     
-    # Keep track of best name.
-    lockedNameMap = {}
-    resultMap = {}
-    idMap = {}
-    bestNameMap = {}
-    bestNameDist = 1000
-    bestHitScore = 0
-   
-    # TODO: create a plex controlled cache for lookup
-    # TODO: by imdbid  -> (title,year)
-    # See if we're being passed a raw ID.
-    findByIdCalled = False
-    if media.guid or re.match('t*[0-9]{7}', media.name):
-      theGuid = media.guid or media.name 
-      if not theGuid.startswith('tt'):
-        theGuid = 'tt' + theGuid
-      
-      # Add a result for the id found in the passed in guid hint.
-      findByIdCalled = True
-      (title, year) = self.findById(theGuid)
-      if title is not None:
-        bestHitScore = 100 # Treat a guid-match as a perfect score
-        results.Append(MetadataSearchResult(id=theGuid, name=title, year=year, lang=lang, score=bestHitScore))
-        bestNameMap[theGuid] = title
-        bestNameDist = Util.LevenshteinDistance(media.name, title)
-          
-    if media.year:
-      searchYear = u' (' + safe_unicode(media.year) + u')'
-    else:
-      searchYear = u''
-
-    # first look in the proxy/cache 
-    titleyear_guid = self.titleyear_guid(media.name,media.year)
-
-    cacheConsulted = False
-
-    # plexhash search vector
+    # Plex hash search vector.
     plexHashes = []
     score = 100
 
@@ -118,15 +82,12 @@ class PlexMovieAgent(Agent.Movies):
     except:
       try: plexHashes.append(media.hash)
       except: pass
-        
+
     for ph in plexHashes:
       try:
         url = '%s/%s/hash/%s/%s.xml' % (PLEXMOVIE_URL, PLEXMOVIE_BASE, ph[0:2], ph)
         Log("checking plexhash search vector: %s" % url)
-        res = XML.ElementFromURL(url, cacheTime=3600)
-        
-        # Maps GUID to [distance, best name, year, percentage, count].
-        hash_matches = {}
+        res = XML.ElementFromURL(url, cacheTime=CACHE_1DAY)
         
         for match in res.xpath('//match'):
           id    = "tt%s" % match.get('guid')
@@ -138,7 +99,7 @@ class PlexMovieAgent(Agent.Movies):
           
           # Intialize.
           if not hash_matches.has_key(id):
-            hash_matches[id] = [1000, '', None, 0, 0]
+            hash_matches[id] = [1000, '', None, 0, 0, 0]
             
           # Tally.
           vector = hash_matches[id]
@@ -150,105 +111,231 @@ class PlexMovieAgent(Agent.Movies):
             vector[0] = dist
             vector[1] = name
             vector[2] = year
-        
-        # Now find the best match by numbers.
-        for key in hash_matches.keys():
-          match = hash_matches[key]
-          best_name, year = get_best_name_and_year(key[2:], lang, match[1], match[2], lockedNameMap)
-          total_pct = match[3]
-          total_cnt = match[4]
-          
-          # Compute score penalty for percentage/count.
-          score_penalty = (100-total_pct)/5
-          if total_cnt < 500:
-            score_penalty += (500-total_cnt)/500 * 10
-            
-          # Year penalty/bonus
-          if media.year and year and int(media.year) != int(year):
-            yearDiff = abs(int(media.year)-(int(year)))
-            score_penalty = 5 * yearDiff
-          elif media.year and year and int(media.year) == int(year):
-            score_penalty += -5
-          
-          # Add the result.
-          Log("Adding hash match: %s (%s) score=%d penalty=%d" % (best_name, year, score-score_penalty, score_penalty))
-          result = MetadataSearchResult(id = key, name  = best_name, year = year, lang  = lang, score = score-score_penalty)
-          results.Append(result)
-          resultMap[key] = result
-          
-          # Keep track of best hit score.
-          cacheConsulted = True
-          if (score - score_penalty) > bestHitScore:
-            bestHitScore = score - score_penalty
-  
+
       except Exception, e:
         Log("freebase/proxy plexHash lookup failed: %s" % repr(e))
 
-    score = 100
 
-    # title|year search vector
+  def scoreHashResults(self, media, hash_matches):
+    
+    # TODO: Only score the top N when auto.
+
+    score = 100
+    
+    # Now find the best match by numbers.
+    for key in hash_matches.keys():
+      match = hash_matches[key]
+
+      year = match[2]
+      total_pct = match[3]
+      total_cnt = match[4]
+      
+      # Compute score penalty for percentage/count.
+      score_penalty = (100-total_pct)/5
+      if total_cnt < 500:
+        score_penalty += (500-total_cnt)/500 * 10
+        
+      # Year penalty/bonus.
+      if media.year and year and int(media.year) != int(year):
+        yearDiff = abs(int(media.year)-(int(year)))
+        score_penalty = 5 * yearDiff
+      elif media.year and year and int(media.year) == int(year):
+        score_penalty += -5
+      
+      # Store the final score in the result vector.
+      hash_matches[key][5] = score - score_penalty
+
+  def getTitleYearResults(self, media, title_year_matches):
+    
+    # Title/Year search vector.
+    titleyear_guid = self.titleyear_guid(media.name,media.year)
     url = '%s/%s/guid/%s/%s.xml' % (PLEXMOVIE_URL, PLEXMOVIE_BASE, titleyear_guid[0:2], titleyear_guid)
     Log("checking title|year search vector: %s" % url)
     try:
-      res = XML.ElementFromURL(url, cacheTime=60)
+      res = XML.ElementFromURL(url, cacheTime=CACHE_1DAY)
+
       for match in res.xpath('//match'):
         id       = "tt%s" % match.get('guid')
 
         imdbName = safe_unicode(match.get('title'))
-        distance = Util.LevenshteinDistance(media.name, imdbName.encode('utf-8'))
-        Log("distance for %s: %s" % (imdbName, distance))
-        if not bestNameMap.has_key(id) or distance < bestNameDist:
-          bestNameMap[id] = imdbName
-          if distance < bestNameDist:
-            bestNameDist = distance
+        dist = Util.LevenshteinDistance(media.name, imdbName.encode('utf-8'))
+        Log("distance for %s: %s" % (imdbName, dist))
+        # if not bestNameMap.has_key(id) or dist < bestNameDist:
+        #   bestNameMap[id] = imdbName
+        #   if dist < bestNameDist:
+        #     bestNameDist = dist
         
         imdbYear = safe_unicode(match.get('year'))
         count    = int(match.get('count'))
-        pct      = float(match.get('percentage',0))/100
-        bonus    = int(PERCENTAGE_BONUS_MAX*pct)
-        Log("bonus for percentage %f is %f" % (pct, bonus))
+        #pct      = float(match.get('percentage',0))/100
+        pct      = int(match.get('percentage'))
+        # bonus    = int(PERCENTAGE_BONUS_MAX*pct)
+        # Log("bonus for percentage %f is %f" % (pct, bonus))
 
-        scorePenalty = 0
-        scorePenalty += -bonus + int(distance*2)
+        # Intialize.
+        if not title_year_matches.has_key(id):
+          title_year_matches[id] = [1000, '', None, 0, 0, 0]
 
-        if int(imdbYear) > datetime.datetime.now().year:
-          Log(imdbName + ' penalizing for future release date')
-          scorePenalty += SCORE_THRESHOLD_IGNORE_PENALTY 
+        # Tally.
+        vector = title_year_matches[id]
+        vector[3] = vector[3] + pct
+        vector[4] = vector[4] + count
 
-        # Check to see if the hinted year is different from imdb's year, if so penalize.
-        elif media.year and imdbYear and int(media.year) != int(imdbYear):
-          Log(imdbName + ' penalizing for hint year and imdb year being different')
-          yearDiff = abs(int(media.year)-(int(imdbYear)))
-          if yearDiff == 1:
-            scorePenalty += 5
-          elif yearDiff == 2:
-            scorePenalty += 10
-          else:
-            scorePenalty += 15
-        # Bonus (or negatively penalize) for year match.
-        elif media.year and imdbYear and int(media.year) != int(imdbYear):
-          scorePenalty += -5
+        # See if a better name.
+        if dist < vector[0]:
+          vector[0] = dist
+          vector[1] = imdbName
+          vector[2] = imdbYear
 
-        Log("score penalty (used to determine if google is needed) = %d" % scorePenalty)
-
-        if (score - scorePenalty) > bestHitScore:
-          bestHitScore = score - scorePenalty
-
-        # Get the official, localized name.
-        name, year = get_best_name_and_year(id[2:], lang, imdbName, imdbYear, lockedNameMap)
-
-        cacheConsulted = True
-        results.Append(MetadataSearchResult(id = id, name  = name, year = year, lang  = lang, score = score-scorePenalty))
-        score = score - 4
     except Exception, e:
       Log("freebase/proxy guid lookup failed: %s" % repr(e))
 
-    doGoogleSearch = False
-    if len(results) == 0 or bestHitScore < SCORE_THRESHOLD_IGNORE or manual == True or (bestHitScore < 100 and len(results) == 1):
-      doGoogleSearch = True
 
-    Log("PLEXMOVIE INFO RETRIEVAL: FINDBYID: %s CACHE: %s SEARCH_ENGINE: %s" % (findByIdCalled, cacheConsulted, doGoogleSearch))
+  def scoreTitleYearResults(self, media, title_year_matches):
+  
+  # Maps GUID to [distance, best name, year, percentage, count, score].
+    
+    # TODO: Only score the top N when auto.
 
+    score = 100
+
+    for key in title_year_matches.keys():
+      match = title_year_matches[key]
+      
+      name = match[1]
+      year = match[2]
+      total_pct = match[3]
+      total_cnt = match[4]
+      
+      # Compute score penalty for percentage/count.
+      score_penalty = (100-total_pct)/5
+      if total_cnt < 500:
+        score_penalty += (500-total_cnt)/500 * 10
+
+      # scorePenalty += -bonus + int(distance*2)
+
+      if int(year) > datetime.datetime.now().year:
+        Log(name + ' penalizing for future release date')
+        score_penalty += SCORE_THRESHOLD_IGNORE_PENALTY # This seems overly harsh.
+
+      # Check to see if the hinted year is different from imdb's year, if so penalize.
+      elif media.year and year and int(media.year) != int(year):
+        Log(name + ' penalizing for hint year and imdb year being different')
+        yearDiff = abs(int(media.year)-(int(year)))
+        if yearDiff == 1:
+          score_penalty += 5
+        elif yearDiff == 2:
+          score_penalty += 10
+        else:
+          score_penalty += 15
+      # Bonus (or negatively penalize) for year match.
+      elif media.year and year and int(media.year) != int(year):
+        score_penalty += -5
+
+      # Store the final score in the result vector.
+      title_year_matches[key][5] = score - score_penalty
+
+      #Log("score penalty (used to determine if google is needed) = %d" % scorePenalty)
+
+
+      # if (score - scorePenalty) > bestHitScore:
+      #   bestHitScore = score - scorePenalty
+
+      # # Get the official, localized name.
+      # name, year = get_best_name_and_year(id[2:], lang, imdbName, imdbYear, lockedNameMap)
+
+      # results.Append(MetadataSearchResult(id = id, name  = name, year = year, lang  = lang, score = score-scorePenalty))
+      # score = score - 4
+
+      
+  
+  def search(self, results, media, lang, manual=False):
+    
+    # Keep track of best name.
+    lockedNameMap = {}
+    idMap = {}
+    bestNameMap = {}
+    bestNameDist = 1000
+    bestHitScore = 0
+    cacheConsulted = False
+
+    # Map GUID to [distance, best name, year, percentage, count, score].
+    hash_matches = {}
+    title_year_matches = {}    
+   
+    # TODO: create a plex controlled cache for lookup
+    # TODO: by imdbid  -> (title,year)
+    # See if we're being passed a raw ID.
+    findByIdCalled = False
+    if media.guid or re.match('t*[0-9]{7}', media.name):
+      theGuid = media.guid or media.name 
+      if not theGuid.startswith('tt'):
+        theGuid = 'tt' + theGuid
+      Log('Found an ID, attempting quick match based on: ' + theGuid)
+      
+      # Add a result for the id found in the passed in guid hint.
+      findByIdCalled = True
+      (title, year) = self.findById(theGuid)
+      if title is not None:
+        bestHitScore = 100 # Treat a guid-match as a perfect score
+        results.Append(MetadataSearchResult(id=theGuid, name=title, year=year, lang=lang, score=bestHitScore))
+        bestNameMap[theGuid] = title
+        bestNameDist = Util.LevenshteinDistance(media.name, title)
+        return # If we have a perfect ID match, we're done.
+          
+    # Clean up year.
+    if media.year:
+      searchYear = u' (' + safe_unicode(media.year) + u')'
+    else:
+      searchYear = u''
+
+    # Grab hash matches first, since a perfect score here is almost certainly correct.
+    self.getHashResults(media, hash_matches)
+    self.scoreHashResults(media, hash_matches)
+    Log('---- HASH RESULTS MAP ----')
+    Log(str(hash_matches))
+    
+    # Add scored hash results to search results.
+    for key in hash_matches.keys():
+      best_name, year = get_best_name_and_year(key[2:], lang, hash_matches[key][1], hash_matches[key][2], lockedNameMap)
+      Log("Adding hash match: %s (%s) score=%d" % (best_name, year, hash_matches[key][5]))
+      results.Append(MetadataSearchResult(id = key, name  = best_name, year = year, lang  = lang, score = hash_matches[key][5]))
+      if bestHitScore < hash_matches[key][5]:
+        bestHitScore = hash_matches[key][5]
+      cacheConsulted = True
+
+    if not manual and bestHitScore >= 100:
+      Log('Found perfect match with plex hash query.')
+      return
+
+    # Grab title/year matches.
+    self.getTitleYearResults(media, title_year_matches)
+    self.scoreTitleYearResults(media, title_year_matches)
+
+    Log('---- TITLE_YEAR RESULTS MAP ----')
+    Log(str(title_year_matches))
+
+    # Add scored title year results to search results.
+    for key in title_year_matches.keys():
+      best_name, year = get_best_name_and_year(key[2:], lang, title_year_matches[key][1], title_year_matches[key][2], lockedNameMap)
+      Log("Adding title_year match: %s (%s) score=%d" % (best_name, year, title_year_matches[key][5]))
+      results.Append(MetadataSearchResult(id = key, name  = best_name, year = year, lang  = lang, score = title_year_matches[key][5]))
+      if bestHitScore < title_year_matches[key][5]:
+        bestHitScore = title_year_matches[key][5]
+      cacheConsulted = True
+
+    if not manual and bestHitScore >= 100:
+      Log('Found perfect match with title/year query.')
+      return
+
+    # # Google fallback search starts here.
+    # score = 100
+    # doGoogleSearch = False
+    # if len(results) == 0 or bestHitScore < SCORE_THRESHOLD_IGNORE or manual == True or (bestHitScore < 100 and len(results) == 1):
+    #   doGoogleSearch = True
+
+    #Log("PLEXMOVIE INFO RETRIEVAL: FINDBYID: %s CACHE: %s SEARCH_ENGINE: %s" % (findByIdCalled, cacheConsulted, doGoogleSearch))
+    doGoogleSearch = True
     if doGoogleSearch:
       # Try to strip diacriticals, but otherwise use the UTF-8.
       normalizedName = String.StripDiacritics(media.name)
