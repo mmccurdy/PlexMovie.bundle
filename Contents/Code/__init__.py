@@ -1,4 +1,4 @@
-import datetime, re, time, unicodedata, hashlib, urlparse, types, urllib
+import re, time, unicodedata, hashlib, urlparse, types, urllib
 
 # [might want to look into language/country stuff at some point] 
 # param info here: http://code.google.com/apis/ajaxsearch/documentation/reference.html
@@ -13,13 +13,24 @@ MPDB_ROOT = 'http://movieposterdb.plexapp.com'
 MPDB_JSON = MPDB_ROOT + '/1/request.json?imdb_id=%s&api_key=p13x2&secret=%s&width=720&thumb_width=100'
 MPDB_SECRET = 'e3c77873abc4866d9e28277a9114c60c'
 
-SCORE_THRESHOLD_IGNORE         = 85
+# PlexMovie tunables.
+INITIAL_SCORE = 100 # Starting value for score before deductions are taken.
+PERCENTAGE_PENALTY_MAX = 20 # Maximum amount to penalize matches with low percentages.
+COUNT_PENALTY_THRESHOLD = 500 # Items with less than this value are penalized on a scale of 0 to COUNT_PENALTY_MAX.
+COUNT_PENALTY_MAX = 10 # Maximum amount to penalize matches with low counts.
+FUTURE_RELEASE_DATE_PENALTY = 10 # How much to penalize movies whose release dates are in the future.
+YEAR_PENALTY_MAX = 10 # Maximum amount to penalize for mismatched years.
+GOOD_SCORE = 98 # Score required to short-circuit matching and stop searching.
+SEARCH_RESULT_PERCENTAGE_THRESHOLD = 80 # Minimum 'percentage' value considered credible for PlexMovie results. 
+
+# Google fallback tunables.
+SCORE_THRESHOLD_IGNORE = 85
 SCORE_THRESHOLD_IGNORE_PENALTY = 100 - SCORE_THRESHOLD_IGNORE
 SCORE_THRESHOLD_IGNORE_PCT = float(SCORE_THRESHOLD_IGNORE_PENALTY)/100
 PERCENTAGE_BONUS_MAX = 20
 
 def Start():
-  HTTP.CacheTime = CACHE_1HOUR * 4
+  HTTP.CacheTime = CACHE_1WEEK
   
 class PlexMovieAgent(Agent.Movies):
   name = 'Freebase'
@@ -68,25 +79,102 @@ class PlexMovieAgent(Agent.Movies):
       Log("Exception obtaining result from Google.")
     
     return []
-  
+
+
+  def getPlexMovieResults(self, media, matches, search_type='hash', plex_hash=''):
+    if search_type is 'hash':
+      url = '%s/%s/hash/%s/%s.xml' % (PLEXMOVIE_URL, PLEXMOVIE_BASE, plex_hash[0:2], plex_hash)
+    else:
+      titleyear_guid = self.titleyear_guid(media.name,media.year)
+      url = '%s/%s/guid/%s/%s.xml' % (PLEXMOVIE_URL, PLEXMOVIE_BASE, titleyear_guid[0:2], titleyear_guid)
+
+    try:
+      Log("checking %s search vector: %s" % (search_type, url))
+      res = XML.ElementFromURL(url, cacheTime=CACHE_1WEEK, headers={'Accept-Encoding':'gzip'})
+      
+      for match in res.xpath('//match'):
+        id    = "tt%s" % match.get('guid')
+        name  = safe_unicode(match.get('title'))
+        year  = safe_unicode(match.get('year'))
+        count = int(match.get('count'))
+        pct   = int(match.get('percentage', 0))
+        dist  = Util.LevenshteinDistance(media.name, name.encode('utf-8'))
+        
+        # Intialize.
+        if not matches.has_key(id):
+          matches[id] = [1000, '', None, 0, 0, 0]
+          
+        # Tally.
+        vector = matches[id]
+        vector[3] = vector[3] + pct
+        vector[4] = vector[4] + count
+          
+        # See if a better name.
+        if dist < vector[0]:
+          vector[0] = dist
+          vector[1] = name
+          vector[2] = year
+
+    except Exception, e:
+      Log("freebase/proxy %s lookup failed: %s" % (search_type, str(e)))
+
+
+  def scoreResults(self, media, matches):
+
+    for key in matches.keys():
+      match = matches[key]
+
+      dist = match[0]
+      name = match[1]
+      year = match[2]
+      total_pct = match[3]
+      total_cnt = match[4]
+      
+      # Compute score penalty for percentage/count.
+      score_penalty = (100-total_pct) * (PERCENTAGE_PENALTY_MAX/100)
+      if total_cnt < COUNT_PENALTY_THRESHOLD:
+        score_penalty += (COUNT_PENALTY_THRESHOLD-total_cnt)/COUNT_PENALTY_THRESHOLD * COUNT_PENALTY_MAX
+      
+      # Year penalty/bonus.
+      if int(year) > Datetime.Now().year:
+        score_penalty += FUTURE_RELEASE_DATE_PENALTY
+
+      if media.year and year:
+        per_year_penalty = int(YEAR_PENALTY_MAX / 3)
+        year_delta = abs(int(media.year)-(int(year)))
+        if year_delta > 3:
+          score_penalty += YEAR_PENALTY_MAX
+        else:
+          score_penalty += year_delta * per_year_penalty
+
+      # Store the final score in the result vector.
+      matches[key][5] = INITIAL_SCORE - dist - score_penalty
+
+
   def search(self, results, media, lang, manual=False):
     
     # Keep track of best name.
     lockedNameMap = {}
-    resultMap = {}
     idMap = {}
     bestNameMap = {}
     bestNameDist = 1000
     bestHitScore = 0
+    continueSearch = True
+
+    # Map GUID to [distance, best name, year, percentage, count, score].
+    hash_matches = {}
+    title_year_matches = {}    
    
     # TODO: create a plex controlled cache for lookup
     # TODO: by imdbid  -> (title,year)
+    
     # See if we're being passed a raw ID.
     findByIdCalled = False
     if media.guid or re.match('t*[0-9]{7}', media.name):
       theGuid = media.guid or media.name 
       if not theGuid.startswith('tt'):
         theGuid = 'tt' + theGuid
+      Log('Found an ID, attempting quick match based on: ' + theGuid)
       
       # Add a result for the id found in the passed in guid hint.
       findByIdCalled = True
@@ -96,160 +184,76 @@ class PlexMovieAgent(Agent.Movies):
         results.Append(MetadataSearchResult(id=theGuid, name=title, year=year, lang=lang, score=bestHitScore))
         bestNameMap[theGuid] = title
         bestNameDist = Util.LevenshteinDistance(media.name, title)
+        continueSearch = False
           
+    # Clean up year.
     if media.year:
       searchYear = u' (' + safe_unicode(media.year) + u')'
     else:
       searchYear = u''
 
-    # first look in the proxy/cache 
-    titleyear_guid = self.titleyear_guid(media.name,media.year)
-
-    cacheConsulted = False
-
-    # plexhash search vector
-    plexHashes = []
-    score = 100
-
-    try:
-      for item in media.items:
-        for part in item.parts:
-          if part.hash: plexHashes.append(part.hash)
-    except:
-      try: plexHashes.append(media.hash)
-      except: pass
-        
-    for ph in plexHashes:
+    # Grab hash matches first, since a perfect score based on hash is almost certainly correct.
+    # Build plex hash list and search each one.
+    if manual or continueSearch:
+      plexHashes = []
       try:
-        url = '%s/%s/hash/%s/%s.xml' % (PLEXMOVIE_URL, PLEXMOVIE_BASE, ph[0:2], ph)
-        Log("checking plexhash search vector: %s" % url)
-        res = XML.ElementFromURL(url, cacheTime=3600)
-        
-        # Maps GUID to [distance, best name, year, percentage, count].
-        hash_matches = {}
-        
-        for match in res.xpath('//match'):
-          id    = "tt%s" % match.get('guid')
-          name  = safe_unicode(match.get('title'))
-          year  = safe_unicode(match.get('year'))
-          count = int(match.get('count'))
-          pct   = int(match.get('percentage', 0))
-          dist  = Util.LevenshteinDistance(media.name, name.encode('utf-8'))
-          
-          # Intialize.
-          if not hash_matches.has_key(id):
-            hash_matches[id] = [1000, '', None, 0, 0]
-            
-          # Tally.
-          vector = hash_matches[id]
-          vector[3] = vector[3] + pct
-          vector[4] = vector[4] + count
-            
-          # See if a better name.
-          if dist < vector[0]:
-            vector[0] = dist
-            vector[1] = name
-            vector[2] = year
-        
-        # Now find the best match by numbers.
-        for key in hash_matches.keys():
-          match = hash_matches[key]
+        for item in media.items:
+          for part in item.parts:
+            if part.hash: plexHashes.append(part.hash)
+      except:
+        try: plexHashes.append(media.hash)
+        except: pass
+
+      for plex_hash in plexHashes:
+        self.getPlexMovieResults(media, hash_matches, search_type='hash', plex_hash=plex_hash)
+
+      self.scoreResults(media, hash_matches)
+      
+      Log('---- HASH RESULTS MAP ----')
+      Log(str(hash_matches))
+      
+      # Add scored hash results to search results.
+      for key in hash_matches.keys():
+        match = hash_matches[key]
+        if int(match[3]) >= SEARCH_RESULT_PERCENTAGE_THRESHOLD and not manual:
           best_name, year = get_best_name_and_year(key[2:], lang, match[1], match[2], lockedNameMap)
-          total_pct = match[3]
-          total_cnt = match[4]
-          
-          # Compute score penalty for percentage/count.
-          score_penalty = (100-total_pct)/5
-          if total_cnt < 500:
-            score_penalty += (500-total_cnt)/500 * 10
-            
-          # Year penalty/bonus
-          if media.year and year and int(media.year) != int(year):
-            yearDiff = abs(int(media.year)-(int(year)))
-            score_penalty = 5 * yearDiff
-          elif media.year and year and int(media.year) == int(year):
-            score_penalty += -5
-          
-          # Add the result.
-          Log("Adding hash match: %s (%s) score=%d penalty=%d" % (best_name, year, score-score_penalty, score_penalty))
-          result = MetadataSearchResult(id = key, name  = best_name, year = year, lang  = lang, score = score-score_penalty)
-          results.Append(result)
-          resultMap[key] = result
-          
-          # Keep track of best hit score.
-          cacheConsulted = True
-          if (score - score_penalty) > bestHitScore:
-            bestHitScore = score - score_penalty
-  
-      except Exception, e:
-        Log("freebase/proxy plexHash lookup failed: %s" % repr(e))
+          Log("Adding hash match: %s (%s) score=%d" % (best_name, year, match[5]))
+          results.Append(MetadataSearchResult(id = key, name  = best_name, year = year, lang  = lang, score = match[5]))
+          if bestHitScore < match[5]:
+            bestHitScore = match[5]
+        else:
+          Log("Skipping hash match (doesn\'t meet percentage threshold): %s (%s) percentage=%d" % (match[1], match[2], match[3]))
 
-    score = 100
+      if bestHitScore >= GOOD_SCORE:
+        Log('Found perfect match with plex hash query.')
+        continueSearch = False
 
-    # title|year search vector
-    url = '%s/%s/guid/%s/%s.xml' % (PLEXMOVIE_URL, PLEXMOVIE_BASE, titleyear_guid[0:2], titleyear_guid)
-    Log("checking title|year search vector: %s" % url)
-    try:
-      res = XML.ElementFromURL(url, cacheTime=60)
-      for match in res.xpath('//match'):
-        id       = "tt%s" % match.get('guid')
+    # Grab title/year matches.
+    if manual or continueSearch:
+      self.getPlexMovieResults(media, title_year_matches, search_type='title/year')
+      self.scoreResults(media, title_year_matches)
 
-        imdbName = safe_unicode(match.get('title'))
-        distance = Util.LevenshteinDistance(media.name, imdbName.encode('utf-8'))
-        Log("distance for %s: %s" % (imdbName, distance))
-        if not bestNameMap.has_key(id) or distance < bestNameDist:
-          bestNameMap[id] = imdbName
-          if distance < bestNameDist:
-            bestNameDist = distance
-        
-        imdbYear = safe_unicode(match.get('year'))
-        count    = int(match.get('count'))
-        pct      = float(match.get('percentage',0))/100
-        bonus    = int(PERCENTAGE_BONUS_MAX*pct)
-        Log("bonus for percentage %f is %f" % (pct, bonus))
+      Log('---- TITLE_YEAR RESULTS MAP ----')
+      Log(str(title_year_matches))
 
-        scorePenalty = 0
-        scorePenalty += -bonus + int(distance*2)
+      # Add scored title year results to search results.
+      for key in title_year_matches.keys():
+        match = title_year_matches[key]
+        if int(match[3]) >= SEARCH_RESULT_PERCENTAGE_THRESHOLD and not manual:
+          best_name, year = get_best_name_and_year(key[2:], lang, match[1], match[2], lockedNameMap)
+          Log("Adding title_year match: %s (%s) score=%d" % (best_name, year, match[5]))
+          results.Append(MetadataSearchResult(id = key, name  = best_name, year = year, lang  = lang, score = match[5]))
+          if bestHitScore < match[5]:
+            bestHitScore = match[5]
+        else:
+          Log("Skipping title/year match (doesn\'t meet percentage threshold): %s (%s) percentage=%d" % (match[1], match[2], match[3]))
 
-        if int(imdbYear) > datetime.datetime.now().year:
-          Log(imdbName + ' penalizing for future release date')
-          scorePenalty += SCORE_THRESHOLD_IGNORE_PENALTY 
+      if bestHitScore >= GOOD_SCORE:
+        Log('Found perfect match with title/year query.')
+        continueSearch = False
 
-        # Check to see if the hinted year is different from imdb's year, if so penalize.
-        elif media.year and imdbYear and int(media.year) != int(imdbYear):
-          Log(imdbName + ' penalizing for hint year and imdb year being different')
-          yearDiff = abs(int(media.year)-(int(imdbYear)))
-          if yearDiff == 1:
-            scorePenalty += 5
-          elif yearDiff == 2:
-            scorePenalty += 10
-          else:
-            scorePenalty += 15
-        # Bonus (or negatively penalize) for year match.
-        elif media.year and imdbYear and int(media.year) != int(imdbYear):
-          scorePenalty += -5
-
-        Log("score penalty (used to determine if google is needed) = %d" % scorePenalty)
-
-        if (score - scorePenalty) > bestHitScore:
-          bestHitScore = score - scorePenalty
-
-        # Get the official, localized name.
-        name, year = get_best_name_and_year(id[2:], lang, imdbName, imdbYear, lockedNameMap)
-
-        cacheConsulted = True
-        results.Append(MetadataSearchResult(id = id, name  = name, year = year, lang  = lang, score = score-scorePenalty))
-        score = score - 4
-    except Exception, e:
-      Log("freebase/proxy guid lookup failed: %s" % repr(e))
-
-    doGoogleSearch = False
-    if len(results) == 0 or bestHitScore < SCORE_THRESHOLD_IGNORE or manual == True or (bestHitScore < 100 and len(results) == 1):
-      doGoogleSearch = True
-
-    Log("PLEXMOVIE INFO RETRIEVAL: FINDBYID: %s CACHE: %s SEARCH_ENGINE: %s" % (findByIdCalled, cacheConsulted, doGoogleSearch))
-
-    if doGoogleSearch:
+    # Google fallback search starts here.
+    if manual or continueSearch:
       # Try to strip diacriticals, but otherwise use the UTF-8.
       normalizedName = String.StripDiacritics(media.name)
       if len(normalizedName) == 0:
@@ -354,7 +358,7 @@ class PlexMovieAgent(Agent.Movies):
                 continue
                 
               # Check to see if the item's release year is in the future, if so penalize.
-              if imdbYear > datetime.datetime.now().year:
+              if imdbYear > Datetime.Now().year:
                 Log(imdbName + ' penalizing for future release date')
                 scorePenalty += SCORE_THRESHOLD_IGNORE_PENALTY 
             
@@ -453,7 +457,7 @@ class PlexMovieAgent(Agent.Movies):
     url = '%s/%s/%s/%s.xml' % (FREEBASE_URL, FREEBASE_BASE, guid[-2:], guid)
 
     try:
-      movie = XML.ElementFromURL(url, cacheTime=3600)
+      movie = XML.ElementFromURL(url, cacheTime=CACHE_1WEEK, headers={'Accept-Encoding':'gzip'})
 
       # Title.
       if not setTitle:
@@ -544,7 +548,8 @@ class PlexMovieAgent(Agent.Movies):
       id = m.groups(1)[0]
       # We already tried Freebase above, so go directly to Google
       (title, year) = self.findById(id, skipFreebase=True)
-      metadata.year = int(year)
+      if year:
+        metadata.year = int(year)
 
 
   def findById(self, id, skipFreebase=False):
@@ -556,7 +561,7 @@ class PlexMovieAgent(Agent.Movies):
       url = '%s/%s/%s/%s.xml' % (FREEBASE_URL, FREEBASE_BASE, id[-2:], id[2:])
 
       try:
-        movie = XML.ElementFromURL(url, cacheTime=3600)
+        movie = XML.ElementFromURL(url, cacheTime=CACHE_1WEEK, headers={'Accept-Encoding':'gzip'})
 
         # Title
         if len(movie.get('title')) > 0:
@@ -699,7 +704,7 @@ def get_best_name_and_year(guid, lang, fallback, fallback_year, best_name_map):
   ret = (fallback, fallback_year)
   
   try:
-    movie = XML.ElementFromURL(url, cacheTime=3600)
+    movie = XML.ElementFromURL(url, cacheTime=CACHE_1WEEK, headers={'Accept-Encoding':'gzip'})
     
     movieEl = movie.xpath('//movie')[0]
     if movieEl.get('originally_available_at'):
