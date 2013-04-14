@@ -4,9 +4,9 @@ import re, time, unicodedata, hashlib, urlparse, types, urllib
 # param info here: http://code.google.com/apis/ajaxsearch/documentation/reference.html
 #
 GOOGLE_JSON_URL = 'http://ajax.googleapis.com/ajax/services/search/web?v=1.0&userip=%s&rsz=large&q=%s'
-FREEBASE_URL    = 'http://192.168.1.116'
+FREEBASE_URL    = 'http://freebase.plexapp.com'
 FREEBASE_BASE   = 'movies'
-PLEXMOVIE_URL   = 'http://192.168.1.22'
+PLEXMOVIE_URL   = 'http://plexmovie.plexapp.com'
 PLEXMOVIE_BASE  = 'movie'
 
 MPDB_ROOT = 'http://movieposterdb.plexapp.com'
