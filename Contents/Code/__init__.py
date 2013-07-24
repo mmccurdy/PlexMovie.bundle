@@ -44,7 +44,7 @@ class PlexMovieAgent(Agent.Movies):
                Locale.Language.Latvian, Locale.Language.Norwegian, Locale.Language.Persian,
                Locale.Language.Polish, Locale.Language.Portuguese, Locale.Language.Romanian,
                Locale.Language.Russian, Locale.Language.Slovak, Locale.Language.Thai,
-               Locale.Language.Turkish, Locale.Language.Ukranian, Locale.Language.Vietnamese]
+               Locale.Language.Turkish, Locale.Language.Ukrainian, Locale.Language.Vietnamese]
 
   def identifierize(self, string):
       string = re.sub( r"\s+", " ", string.strip())
